@@ -17,10 +17,10 @@ cilium-operator-azure hive dot-graph [flags]
 ### Options inherited from parent commands
 
 ```
-      --azure-resource-group string                                Resource group to use for Azure IPAM
+      --azure-resource-group string                                Resource group containing the cluster nodes, defaults to cilium operator's own resource group retrieved via Azure Instance Metadata Service (IMDS)
       --azure-subscription-id string                               Subscription ID to access Azure API
       --azure-use-primary-address                                  Use Azure IP address from interface's primary IPConfigurations
-      --azure-user-assigned-identity-id string                     ID of the user assigned identity used to auth with the Azure API
+      --azure-user-assigned-identity-id string                     Client ID (UUID) of the user-assigned managed identity used to auth with the Azure API
       --ces-max-ciliumendpoints-per-ces int                        Maximum number of CiliumEndpoints allowed in a CES (default 100)
       --ces-rate-limits string                                     Configure rate limits for the CES controller. Accepts a list of rate limit configurations, must be a JSON formatted string. (default "[{\"nodes\":0,\"limit\":10,\"burst\":20}]")
       --cilium-endpoint-gc-interval duration                       GC interval for cilium endpoints (default 5m0s)
@@ -142,6 +142,7 @@ cilium-operator-azure hive dot-graph [flags]
       --taint-sync-workers int                                     Number of workers used to synchronize node taints and conditions (default 10)
       --unmanaged-pod-watcher-interval duration                    Interval to check for unmanaged kube-dns pods (0 to disable) (default 15s)
       --validate-network-policy                                    Whether to enable or disable the informational network policy validator (default true)
+      --ztunnel-ca-type string                                     CA backend used by ztunnel: 'spire' (external SPIRE server) or 'internal' (Cilium-managed CA) (default "internal")
 ```
 
 ### SEE ALSO

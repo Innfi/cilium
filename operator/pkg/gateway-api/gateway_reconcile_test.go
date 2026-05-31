@@ -27,6 +27,7 @@ import (
 	"github.com/cilium/cilium/operator/pkg/model/translation"
 	gatewayApiTranslation "github.com/cilium/cilium/operator/pkg/model/translation/gateway-api"
 	ciliumv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
+	"github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
 	"github.com/cilium/cilium/pkg/shortener"
 )
 
@@ -198,6 +199,7 @@ func Test_Conformance(t *testing.T) {
 		{name: "grpcroute-listener-hostname-matching", gateway: []gwDetails{{FullName: types.NamespacedName{Name: "grpcroute-listener-hostname-matching", Namespace: "gateway-conformance-infra"}}}},
 		{name: "httproute-backend-protocol-h2c", gateway: []gwDetails{gatewaySameNamespace}},
 		{name: "httproute-backend-protocol-websocket", gateway: []gwDetails{gatewaySameNamespace}},
+		{name: "httproute-cors", gateway: []gwDetails{gatewaySameNamespace}},
 		{name: "httproute-cross-namespace", gateway: []gwDetails{gatewayBackendNamespace}},
 		{
 			name:    "httproute-allowed-kind-by-section-name",
@@ -305,10 +307,9 @@ func Test_Conformance(t *testing.T) {
 				WithStatusSubresource(&gatewayv1.GatewayClass{}).
 				WithStatusSubresource(&gatewayv1.BackendTLSPolicy{})
 
-			switch tt.disableServiceImport {
-			case true:
-				clientBuilder.WithScheme(helpers.TestScheme(helpers.NoMCSOptionalKinds))
-			case false:
+			if tt.disableServiceImport {
+				clientBuilder.WithScheme(helpers.TestScheme(nil))
+			} else {
 				clientBuilder.WithScheme(helpers.TestScheme(helpers.AllOptionalKinds))
 			}
 
@@ -418,6 +419,67 @@ func Test_Conformance(t *testing.T) {
 				readOutput(t, fmt.Sprintf("testdata/gateway/%s/output/backendtlspolicy-%s.yaml", tt.name, btlsp.Name), expectedBTLSP)
 				require.Empty(t, cmp.Diff(expectedBTLSP, actualBTLSP, cmpIgnoreFields...))
 			}
+		})
+	}
+}
+
+func Test_grpcWebTranslationEnabled(t *testing.T) {
+	tests := []struct {
+		name   string
+		config *v2alpha1.CiliumGatewayClassConfig
+		want   bool
+	}{
+		{
+			name: "nil config",
+			want: true,
+		},
+		{
+			name:   "empty config",
+			config: &v2alpha1.CiliumGatewayClassConfig{},
+			want:   true,
+		},
+		{
+			name: "nil enabled",
+			config: &v2alpha1.CiliumGatewayClassConfig{
+				Spec: v2alpha1.CiliumGatewayClassConfigSpec{
+					HTTPOptions: &v2alpha1.HTTPOptions{
+						GRPCWebTranslation: &v2alpha1.GRPCWebTranslationConfig{},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "explicitly enabled",
+			config: &v2alpha1.CiliumGatewayClassConfig{
+				Spec: v2alpha1.CiliumGatewayClassConfigSpec{
+					HTTPOptions: &v2alpha1.HTTPOptions{
+						GRPCWebTranslation: &v2alpha1.GRPCWebTranslationConfig{
+							Enabled: ptr.To(true),
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "disabled",
+			config: &v2alpha1.CiliumGatewayClassConfig{
+				Spec: v2alpha1.CiliumGatewayClassConfigSpec{
+					HTTPOptions: &v2alpha1.HTTPOptions{
+						GRPCWebTranslation: &v2alpha1.GRPCWebTranslationConfig{
+							Enabled: ptr.To(false),
+						},
+					},
+				},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.config.GRPCWebTranslationEnabled())
 		})
 	}
 }
@@ -736,7 +798,8 @@ func fakeIndexHTTPRouteByBackendService(rawObj client.Object) []string {
 				continue
 			}
 			namespace := helpers.NamespaceDerefOr(backend.Namespace, route.Namespace)
-			backendServices = append(backendServices,
+			backendServices = append(
+				backendServices,
 				types.NamespacedName{
 					Namespace: namespace,
 					Name:      string(backend.Name),

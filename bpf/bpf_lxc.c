@@ -536,7 +536,7 @@ int NAME(struct __ctx_buff *ctx)						\
 	ct_state = (struct ct_state *)&ct_buffer->ct_state;			\
 	tuple = (struct ipv4_ct_tuple *)&ct_buffer->tuple;			\
 										\
-	if (!revalidate_data_pull(ctx, &data, &data_end, &ip4))			\
+	if (!revalidate_data(ctx, &data, &data_end, &ip4))			\
 		return drop_for_direction(ctx, DIR, DROP_INVALID, ext_err);	\
 										\
 	tuple->nexthdr = ip4->protocol;						\
@@ -608,7 +608,7 @@ int NAME(struct __ctx_buff *ctx)						\
 	ct_state = (struct ct_state *)&ct_buffer->ct_state;			\
 	tuple = (struct ipv6_ct_tuple *)&ct_buffer->tuple;			\
 										\
-	if (!revalidate_data_pull(ctx, &data, &data_end, &ip6))			\
+	if (!revalidate_data(ctx, &data, &data_end, &ip6))			\
 		return drop_for_direction(ctx, DIR, DROP_INVALID, ext_err);	\
 										\
 	tuple->nexthdr = ip6->nexthdr;						\
@@ -1093,7 +1093,7 @@ static __always_inline int __tail_handle_ipv6(struct __ctx_buff *ctx,
 	struct ipv6hdr *ip6;
 	bool from_l7lb = false;
 
-	if (!revalidate_data_pull(ctx, &data, &data_end, &ip6))
+	if (!revalidate_data(ctx, &data, &data_end, &ip6))
 		return DROP_INVALID;
 
 	if (!CONFIG(enable_ipv6_fragments)) {
@@ -1687,7 +1687,7 @@ static __always_inline int __tail_handle_ipv4(struct __ctx_buff *ctx,
 	struct iphdr *ip4;
 	bool from_l7lb = false;
 
-	if (!revalidate_data_pull(ctx, &data, &data_end, &ip4))
+	if (!revalidate_data(ctx, &data, &data_end, &ip4))
 		return DROP_INVALID;
 
 	/* If IPv4 fragmentation is disabled AND an IPv4 fragmented packet is
@@ -1817,6 +1817,10 @@ int cil_from_container(struct __ctx_buff *ctx)
 		ret = DROP_UNSUPPORTED_L2;
 		goto out;
 	}
+
+	ret = pull_l3_hdr(ctx, proto);
+	if (ret < 0)
+		goto out;
 
 	switch (proto) {
 #ifdef ENABLE_IPV6
@@ -2014,7 +2018,8 @@ static __always_inline
 int tail_ipv6_policy(struct __ctx_buff *ctx)
 {
 	struct ipv6_ct_tuple tuple = {};
-	bool do_redirect = ctx_load_meta(ctx, CB_DELIVERY_REDIRECT);
+	__u32 delivery_flags = ctx_load_meta(ctx, CB_DELIVERY_FLAGS);
+	bool do_redirect = delivery_flags & CB_DELIVERY_FLAGS_REDIRECT;
 	__u32 src_label = ctx_load_and_clear_meta(ctx, CB_SRC_LABEL);
 	bool from_host = ctx_load_and_clear_meta(ctx, CB_FROM_HOST);
 	bool from_tunnel = false;
@@ -2024,8 +2029,13 @@ int tail_ipv6_policy(struct __ctx_buff *ctx)
 	__s8 ext_err = 0;
 	int ret;
 
+	if (delivery_flags & CB_DELIVERY_FLAGS_FROM_HOST)
+		from_host = true;
+
 #ifdef HAVE_ENCAP
 	from_tunnel = ctx_load_and_clear_meta(ctx, CB_FROM_TUNNEL);
+	if (delivery_flags & CB_DELIVERY_FLAGS_FROM_TUNNEL)
+		from_tunnel = true;
 #endif
 
 	if (!revalidate_data(ctx, &data, &data_end, &ip6)) {
@@ -2055,7 +2065,7 @@ int tail_ipv6_policy(struct __ctx_buff *ctx)
 
 		if (do_redirect)
 			ret = redirect_ep(ctx, CONFIG(interface_ifindex),
-					  should_redirect_peer(from_host),
+					  should_redirect_peer(ctx, from_host),
 					  from_tunnel);
 		break;
 	default:
@@ -2326,7 +2336,8 @@ static __always_inline
 int tail_ipv4_policy(struct __ctx_buff *ctx)
 {
 	struct ipv4_ct_tuple tuple = {};
-	bool do_redirect = ctx_load_meta(ctx, CB_DELIVERY_REDIRECT);
+	__u32 delivery_flags = ctx_load_meta(ctx, CB_DELIVERY_FLAGS);
+	bool do_redirect = delivery_flags & CB_DELIVERY_FLAGS_REDIRECT;
 	__u32 src_label = ctx_load_and_clear_meta(ctx, CB_SRC_LABEL);
 	bool from_host = ctx_load_and_clear_meta(ctx, CB_FROM_HOST);
 	bool from_tunnel = false;
@@ -2336,10 +2347,15 @@ int tail_ipv4_policy(struct __ctx_buff *ctx)
 	__s8 ext_err = 0;
 	int ret;
 
+	if (delivery_flags & CB_DELIVERY_FLAGS_FROM_HOST)
+		from_host = true;
+
 	ctx_store_meta(ctx, CB_CLUSTER_ID_INGRESS, 0);
 
 #ifdef HAVE_ENCAP
 	from_tunnel = ctx_load_and_clear_meta(ctx, CB_FROM_TUNNEL);
+	if (delivery_flags & CB_DELIVERY_FLAGS_FROM_TUNNEL)
+		from_tunnel = true;
 #endif
 
 	if (!revalidate_data(ctx, &data, &data_end, &ip4)) {
@@ -2376,7 +2392,7 @@ int tail_ipv4_policy(struct __ctx_buff *ctx)
 
 		if (do_redirect)
 			ret = redirect_ep(ctx, CONFIG(interface_ifindex),
-					  should_redirect_peer(from_host),
+					  should_redirect_peer(ctx, from_host),
 					  from_tunnel);
 		break;
 	default:
@@ -2496,6 +2512,10 @@ int cil_lxc_policy(struct __ctx_buff *ctx)
 		goto out;
 	}
 
+	ret = pull_l3_hdr(ctx, proto);
+	if (ret < 0)
+		goto out;
+
 	switch (proto) {
 #ifdef ENABLE_IPV6
 	case bpf_htons(ETH_P_IPV6):
@@ -2557,6 +2577,10 @@ int cil_lxc_policy_egress(struct __ctx_buff *ctx __maybe_unused)
 	send_trace_notify(ctx, TRACE_FROM_PROXY, SECLABEL, UNKNOWN_ID,
 			  TRACE_EP_ID_UNKNOWN, TRACE_IFINDEX_UNKNOWN,
 			  TRACE_REASON_UNKNOWN, TRACE_PAYLOAD_LEN, proto);
+
+	ret = pull_l3_hdr(ctx, proto);
+	if (ret < 0)
+		goto out;
 
 	switch (proto) {
 #ifdef ENABLE_IPV6
@@ -2647,6 +2671,10 @@ int cil_to_container(struct __ctx_buff *ctx)
 	}
 #endif /* ENABLE_HOST_FIREWALL && !ENABLE_ROUTING */
 
+
+	ret = pull_l3_hdr(ctx, proto);
+	if (ret < 0)
+		goto out;
 
 	switch (proto) {
 #ifdef ENABLE_IPV6

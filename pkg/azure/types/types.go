@@ -4,6 +4,7 @@
 package types
 
 import (
+	iputil "github.com/cilium/cilium/pkg/ip"
 	"github.com/cilium/cilium/pkg/ipam/types"
 )
 
@@ -30,8 +31,6 @@ const (
 // custom resource along with an Azure specification when the node registers
 // itself to the Kubernetes cluster.
 // This struct is embedded into v2.CiliumNode
-//
-// +k8s:deepcopy-gen=true
 type AzureSpec struct {
 	// InterfaceName is the name of the interface the cilium-operator
 	// will use to allocate all the IPs on
@@ -42,8 +41,6 @@ type AzureSpec struct {
 
 // AzureStatus is the status of Azure addressing of the node.
 // This struct is embedded into v2.CiliumNode
-//
-// +k8s:deepcopy-gen=true
 type AzureStatus struct {
 	// Interfaces is the list of interfaces on the node
 	//
@@ -56,21 +53,43 @@ type AzureAddress struct {
 	// IP is the ip address of the address
 	IP string `json:"ip,omitempty"`
 
-	// Subnet is the subnet the address belongs to
+	// Subnet is the subnet the address belongs to.
+	//
+	// Deprecated: use AzureInterface.Subnet.ID. Populated as a mirror for one
+	// release so external consumers of CiliumNode.Status.Azure can migrate.
+	// TODO(https://github.com/cilium/cilium/issues/46074): remove once the migration window closes.
 	Subnet string `json:"subnet,omitempty"`
 
 	// State is the provisioning state of the address
 	State string `json:"state,omitempty"`
 }
 
+// AzureSubnet describes the subnet an AzureInterface is attached to. Azure
+// enforces one subnet per NIC, so it is tracked once per interface (mirroring
+// the AWS and Alibaba patterns).
+type AzureSubnet struct {
+	// ID is the resource ID of the subnet
+	//
+	// +optional
+	ID string `json:"id,omitempty"`
+
+	// CIDR is the CIDR range associated with the subnet
+	//
+	// +optional
+	CIDR iputil.Prefix `json:"cidr,omitzero"`
+}
+
 // AzureInterface represents an Azure Interface
-//
-// +k8s:deepcopy-gen=true
 type AzureInterface struct {
 	// ID is the identifier
 	//
 	// +optional
 	ID string `json:"id,omitempty"`
+
+	// IP is the primary IP of the interface
+	//
+	// +optional
+	IP string `json:"ip,omitempty"`
 
 	// Name is the name of the interface
 	//
@@ -87,8 +106,10 @@ type AzureInterface struct {
 	// +optional
 	State string `json:"state,omitempty"`
 
-	// Addresses is the list of all IPs associated with the interface,
-	// including all secondary addresses
+	// Addresses is the list of secondary IPs associated with the interface.
+	// The primary IP is tracked separately in the IP field, but is also
+	// included here when the operator is configured to expose it for
+	// allocation.
 	//
 	// +optional
 	Addresses []AzureAddress `json:"addresses,omitempty"`
@@ -96,15 +117,24 @@ type AzureInterface struct {
 	// SecurityGroup is the security group associated with the interface
 	SecurityGroup string `json:"security-group,omitempty"`
 
+	// Subnet is the subnet the interface is attached to.
+	//
+	// +optional
+	Subnet AzureSubnet `json:"subnet,omitzero"`
+
 	// Gateway is the interface's subnet's default route
 	//
 	// +optional
-	Gateway string `json:"gateway"`
+	Gateway iputil.Addr `json:"gateway"`
 
 	// CIDR is the range that the interface belongs to.
 	//
+	// Deprecated: use Subnet.CIDR. Retained for one release so agent/operator
+	// rolling upgrades work in either order.
+	// TODO(https://github.com/cilium/cilium/issues/46074): remove once the migration window closes.
+	//
 	// +optional
-	CIDR string `json:"cidr,omitempty"`
+	CIDR iputil.Prefix `json:"cidr,omitzero"`
 
 	// vmssName is the name of the virtual machine scale set. This field is
 	// set by extractIDs()
@@ -154,15 +184,4 @@ func (a *AzureInterface) GetVMScaleSetName() string {
 // GetVMID returns the VM ID the interface belongs to
 func (a *AzureInterface) GetVMID() string {
 	return a.vmID
-}
-
-// ForeachAddress iterates over all addresses and calls fn
-func (a *AzureInterface) ForeachAddress(id string, fn types.AddressIterator) error {
-	for _, address := range a.Addresses {
-		if err := fn(id, a.ID, address.IP, address.Subnet, address); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }

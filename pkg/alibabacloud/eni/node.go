@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 
 	"github.com/cilium/cilium/operator/pkg/ipam/nodemanager"
 	"github.com/cilium/cilium/operator/pkg/ipam/stats"
@@ -15,6 +16,7 @@ import (
 	eniTypes "github.com/cilium/cilium/pkg/alibabacloud/eni/types"
 	"github.com/cilium/cilium/pkg/alibabacloud/utils"
 	"github.com/cilium/cilium/pkg/defaults"
+	iputil "github.com/cilium/cilium/pkg/ip"
 	ipamTypes "github.com/cilium/cilium/pkg/ipam/types"
 	v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	"github.com/cilium/cilium/pkg/lock"
@@ -159,7 +161,7 @@ func (n *Node) CreateInterface(ctx context.Context, allocation *nodemanager.Allo
 	scopedLog.Info("Created new ENI", fieldENIID, eniID)
 
 	if bestSubnet.CIDR.IsValid() {
-		eni.VSwitch.CIDRBlock = bestSubnet.CIDR.String()
+		eni.VSwitch.CIDRBlock = iputil.PrefixFrom(bestSubnet.CIDR)
 	}
 
 	err = n.manager.api.AttachNetworkInterface(ctx, instanceID, eniID)
@@ -241,7 +243,7 @@ func (n *Node) ResyncInterfacesAndIPs(ctx context.Context, scopedLog *slog.Logge
 			}
 
 			for _, ip := range e.PrivateIPSets {
-				available[ip.PrivateIpAddress] = ipamTypes.AllocationIP{Resource: e.NetworkInterfaceID}
+				available[ip.PrivateIpAddress.String()] = ipamTypes.AllocationIP{Resource: e.NetworkInterfaceID}
 			}
 			return nil
 		})
@@ -349,9 +351,9 @@ func (n *Node) PrepareIPRelease(excessIPs int, scopedLog *slog.Logger) *nodemana
 			if ip.Primary {
 				continue
 			}
-			_, ipUsed := n.k8sObj.Status.IPAM.Used[ip.PrivateIpAddress]
+			_, ipUsed := n.k8sObj.Status.IPAM.Used[ip.PrivateIpAddress.String()]
 			if !ipUsed {
-				freeIpsOnENI = append(freeIpsOnENI, ip.PrivateIpAddress)
+				freeIpsOnENI = append(freeIpsOnENI, ip.PrivateIpAddress.String())
 			}
 		}
 		freeOnENICount := len(freeIpsOnENI)
@@ -421,6 +423,24 @@ func (n *Node) loggerLocked() *slog.Logger {
 
 func (n *Node) IsPrefixDelegated() bool {
 	return false
+}
+
+// GetAttachedCIDRs is a no-op since AlibabaCloud does not use multi-pool
+// but uses the CRD allocator.
+func (n *Node) GetAttachedCIDRs() []netip.Prefix {
+	return nil
+}
+
+// PrepareCIDRRelease is a no-op since AlibabaCloud does not use multi-pool
+// but uses the CRD allocator, that's backed by PrepareIPRelease
+func (n *Node) PrepareCIDRRelease(_ []netip.Prefix) []*nodemanager.ReleaseAction {
+	return nil
+}
+
+// ReleaseCIDRs is a no-op since AlibabaCloud does not use multi-pool but
+// uses the CRD allocator, that's backed by ReleaseIPs/ReleaseIPPrefixes
+func (n *Node) ReleaseCIDRs(_ context.Context, _ *nodemanager.ReleaseAction) ([]netip.Prefix, error) {
+	return nil, nil
 }
 
 // getLimits returns the interface and IP limits of this node

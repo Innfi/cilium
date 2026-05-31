@@ -4,6 +4,7 @@
 package envoy
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/cilium/hive/hivetest"
@@ -2220,4 +2221,139 @@ func testXdsServer(t *testing.T) *xdsServer {
 		logger:            logger,
 		l7RulesTranslator: envoypolicy.NewEnvoyL7RulesTranslator(logger, nil),
 	}
+}
+
+func (s *xdsServer) GetNetworkPolicies(resourceNames []string) (map[string]*cilium.NetworkPolicy, error) {
+	resources, err := s.networkPolicyCache.GetResources(NetworkPolicyTypeURL, 0, "", resourceNames)
+	if err != nil {
+		return nil, err
+	}
+	networkPolicies := make(map[string]*cilium.NetworkPolicy, len(resources.Resources))
+	for _, res := range resources.Resources {
+		networkPolicy := res.(*cilium.NetworkPolicy)
+		for _, ip := range networkPolicy.EndpointIps {
+			networkPolicies[ip] = networkPolicy
+		}
+	}
+	return networkPolicies, nil
+}
+
+func TestUpdateNetworkPolicyRevertKeepsLocalEndpointStoreAfterStaleDuplicateRemoval(t *testing.T) {
+	currentEP := &listenerProxyUpdaterMock{ProxyUpdaterMock: &test.ProxyUpdaterMock{
+		Id:   2766,
+		Ipv4: "10.0.0.159",
+		Ipv6: "fd00:10:244::ab0e",
+	}}
+	repo, localIdentity, currentEPP := newTestEndpointPolicy(t, currentEP)
+	xds := newTestXDSServer(t)
+
+	err, revert, finalize := xds.UpdateNetworkPolicy(currentEP, currentEPP, nil)
+	require.NoError(t, err)
+	require.NotNil(t, revert)
+	require.NotNil(t, finalize)
+	finalize()
+
+	staleEP := &listenerProxyUpdaterMock{ProxyUpdaterMock: &test.ProxyUpdaterMock{
+		Id:   500,
+		Ipv4: currentEP.Ipv4,
+		Ipv6: "fd00:10:244::500",
+	}}
+	staleResourceName := strconv.FormatUint(staleEP.GetID(), 10)
+	_, updated, _ := xds.networkPolicyCache.Upsert(NetworkPolicyTypeURL, staleResourceName, &cilium.NetworkPolicy{})
+	require.True(t, updated)
+	xds.localEndpointStore.setLocalEndpoint(staleEP)
+	xds.localEndpointStore.setLocalEndpoint(staleEP)
+	localEP := xds.localEndpointStore.getLocalEndpoint(staleEP.Ipv6)
+	require.NotNil(t, localEP)
+	require.Equal(t, staleEP.GetID(), localEP.GetID())
+
+	refreshedCurrentEPP := distillEndpointPolicy(t, repo, localIdentity, currentEP)
+	err, revert, finalize = xds.UpdateNetworkPolicy(currentEP, refreshedCurrentEPP, nil)
+	require.NoError(t, err)
+	require.NotNil(t, revert)
+	require.NotNil(t, finalize)
+	finalize()
+
+	localEP = xds.localEndpointStore.getLocalEndpoint(currentEP.Ipv4)
+	require.NotNil(t, localEP)
+	require.Equal(t, currentEP.GetID(), localEP.GetID())
+	localEP = xds.localEndpointStore.getLocalEndpoint(currentEP.Ipv6)
+	require.NotNil(t, localEP)
+	require.Equal(t, currentEP.GetID(), localEP.GetID())
+	require.Nil(t, xds.localEndpointStore.getLocalEndpoint(staleEP.Ipv6))
+
+	require.NoError(t, revert())
+
+	localEP = xds.localEndpointStore.getLocalEndpoint(currentEP.Ipv4)
+	require.NotNil(t, localEP)
+	require.Equal(t, currentEP.GetID(), localEP.GetID())
+	localEP = xds.localEndpointStore.getLocalEndpoint(currentEP.Ipv6)
+	require.NotNil(t, localEP)
+	require.Equal(t, currentEP.GetID(), localEP.GetID())
+	require.Nil(t, xds.localEndpointStore.getLocalEndpoint(staleEP.Ipv6))
+
+	stalePolicy, err := xds.networkPolicyCache.Lookup(NetworkPolicyTypeURL, staleResourceName)
+	require.NoError(t, err)
+	require.Nil(t, stalePolicy)
+}
+
+func newTestEndpointPolicy(t *testing.T, ep *listenerProxyUpdaterMock) (*policy.Repository, *identity.Identity, *policy.EndpointPolicy) {
+	logger := hivetest.Logger(t)
+	localIdentity := identity.NewIdentity(9001, labels.LabelArray{
+		labels.NewLabel("id", "a", labels.LabelSourceK8s),
+		labels.NewLabel(k8sConst.PodNamespaceLabel, "default", labels.LabelSourceK8s),
+	}.Labels())
+
+	idMgr := identitymanager.NewIDManager(logger)
+	repo := policy.NewPolicyRepository(
+		logger,
+		identity.IdentityMap{localIdentity.ID: localIdentity.LabelArray},
+		nil,
+		envoypolicy.NewEnvoyL7RulesTranslator(logger, certificatemanager.NewMockSecretManagerInline()),
+		idMgr,
+		testpolicy.NewPolicyMetricsNoop(),
+	)
+	idMgr.Add(localIdentity)
+	t.Cleanup(func() {
+		idMgr.Remove(localIdentity)
+	})
+
+	rule := &api.Rule{
+		EndpointSelector: api.NewESFromLabels(labels.ParseSelectLabel("id=a")),
+		Egress: []api.EgressRule{{
+			EgressCommonRule: api.EgressCommonRule{
+				ToEndpoints: []api.EndpointSelector{api.WildcardEndpointSelector},
+			},
+		}},
+	}
+	require.NoError(t, rule.Sanitize())
+	repo.MustAddList(api.Rules{rule})
+
+	return repo, localIdentity, distillEndpointPolicy(t, repo, localIdentity, ep)
+}
+
+func distillEndpointPolicy(t *testing.T, repo *policy.Repository, localIdentity *identity.Identity, ep *listenerProxyUpdaterMock) *policy.EndpointPolicy {
+	logger := hivetest.Logger(t)
+	selPolicy, _, err := repo.GetSelectorPolicy(localIdentity, 0, &dummyPolicyStats{}, ep.GetID())
+	require.NoError(t, err)
+
+	epp := selPolicy.DistillPolicy(logger, ep, nil)
+	t.Cleanup(func() {
+		epp.Detach(logger)
+	})
+	return epp
+}
+
+func newTestXDSServer(t *testing.T) *xdsServer {
+	logger := hivetest.Logger(t)
+	xds := newXDSServer(
+		logger,
+		nil,
+		nil,
+		newLocalEndpointStore(),
+		xdsServerConfig{},
+		certificatemanager.NewMockSecretManagerInline(),
+	)
+	xds.l7RulesTranslator = envoypolicy.NewEnvoyL7RulesTranslator(logger, nil)
+	return xds
 }

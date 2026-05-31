@@ -27,6 +27,7 @@ import (
 	endpointapi "github.com/cilium/cilium/pkg/endpoint/api"
 	endpointcreator "github.com/cilium/cilium/pkg/endpoint/creator"
 	endpointmetadata "github.com/cilium/cilium/pkg/endpoint/metadata"
+	endpointtypes "github.com/cilium/cilium/pkg/endpoint/types"
 	"github.com/cilium/cilium/pkg/endpointmanager"
 	"github.com/cilium/cilium/pkg/endpointstate"
 	"github.com/cilium/cilium/pkg/ipam"
@@ -252,7 +253,7 @@ func (r *endpointRestorer) validateDatapathModeCompatibility(endpoints map[uint1
 		}
 
 		// Skip fake endpoints
-		if ep.IsProperty(endpoint.PropertyFakeEndpoint) {
+		if ep.IsProperty(endpointtypes.PropertyFakeEndpoint) {
 			continue
 		}
 
@@ -298,7 +299,7 @@ func (r *endpointRestorer) validateDatapathModeCompatibility(endpoints map[uint1
 // Returns true to indicate that the endpoint is valid to restore, and an
 // optional error.
 func (r *endpointRestorer) validateEndpoint(ep *endpoint.Endpoint) (valid bool, err error) {
-	if ep.IsProperty(endpoint.PropertyFakeEndpoint) {
+	if ep.IsProperty(endpointtypes.PropertyFakeEndpoint) {
 		return true, nil
 	}
 
@@ -539,9 +540,7 @@ func (r *endpointRestorer) regenerateRestoredEndpoints(state *endpointRestoreSta
 	// purpose, all endpoints being restored must already be in the
 	// endpoint list.
 	startTimeRestore := time.Now()
-	for i := len(state.restored) - 1; i >= 0; i-- {
-		ep := state.restored[i]
-
+	for i, ep := range slices.Backward(state.restored) {
 		// Insert into endpoint manager so it can be regenerated when calls to
 		// RegenerateAllEndpoints() are made. This must be done synchronously (i.e.,
 		// not in a goroutine) because regenerateRestoredEndpoints must guarantee

@@ -21,6 +21,7 @@ import (
 	"github.com/cilium/cilium/pkg/controller"
 	endpointid "github.com/cilium/cilium/pkg/endpoint/id"
 	"github.com/cilium/cilium/pkg/endpoint/regeneration"
+	endpointtypes "github.com/cilium/cilium/pkg/endpoint/types"
 	"github.com/cilium/cilium/pkg/eventqueue"
 	"github.com/cilium/cilium/pkg/fqdn/restore"
 	"github.com/cilium/cilium/pkg/identity"
@@ -256,7 +257,7 @@ func (e *Endpoint) regeneratePolicy(stats *regenerationStatistics, datapathRegen
 		return err
 	}
 	// Ingress endpoint needs no redirects
-	if !e.isProperty(PropertySkipBPFPolicy) {
+	if !e.isProperty(endpointtypes.PropertySkipBPFPolicy) {
 		stats.proxyConfiguration.Start()
 		desiredRedirects, stats.missingProxyRedirectsCount, rf = e.addNewRedirects(selectorPolicy, datapathRegenCtxt.proxyWaitGroup)
 		stats.proxyConfiguration.End(true)
@@ -358,6 +359,7 @@ func (e *Endpoint) setDesiredPolicy(datapathRegenCtxt *datapathRegenerationConte
 		datapathRegenCtxt.revertStack.Push(func() error {
 			// Do nothing if e.policyMap was not initialized already
 			if e.policyMap != nil && e.desiredPolicy != e.realizedPolicy {
+				desiredPolicyMapLen := e.desiredPolicy.Len()
 				// Revert nextPolicyRevision; otherwise,
 				// res.endpointPolicy will not be recalculated
 				// on the next regeneration attempt, and we
@@ -376,6 +378,10 @@ func (e *Endpoint) setDesiredPolicy(datapathRegenCtxt *datapathRegenerationConte
 				if err != nil {
 					e.getLogger().Error("failed to sync PolicyMap when reverting to last known good policy", logfields.Error, err)
 				}
+
+				// The pressure was set when we performed the sync above;
+				// override it to the "real" value.
+				e.updatePolicyMapPressureMetric(desiredPolicyMapLen)
 			}
 			return nil
 		})
@@ -571,7 +577,7 @@ func (e *Endpoint) updateRealizedState(stats *regenerationStatistics, origDir st
 
 	// Start periodic background full reconciliation of the policy map.
 	// Does nothing if it has already been started.
-	if !e.isProperty(PropertyFakeEndpoint) {
+	if !e.isProperty(endpointtypes.PropertyFakeEndpoint) {
 		e.startSyncPolicyMapController()
 	}
 
@@ -974,7 +980,7 @@ func (e *Endpoint) ComputeInitialPolicy(regenContext *regenerationContext) (erro
 
 		stats.proxyPolicyCalculation.Start()
 		// Initial NetworkPolicy is not reverted
-		err, _ = e.proxy.UpdateNetworkPolicy(e, e.desiredPolicy, nil)
+		err, _, finalize := e.proxy.UpdateNetworkPolicy(e, e.desiredPolicy, nil)
 		stats.proxyPolicyCalculation.End(err == nil)
 		if err != nil {
 			e.getLogger().Warn(
@@ -984,6 +990,7 @@ func (e *Endpoint) ComputeInitialPolicy(regenContext *regenerationContext) (erro
 			// Do not error out so that the policy regeneration is tried again.
 			return nil, release
 		}
+		finalize()
 	}
 
 	// Signal computation of the initial Envoy policy if not done yet
@@ -1160,7 +1167,7 @@ func (e *Endpoint) runIPIdentitySync(endpointIP netip.Addr) {
 func (e *Endpoint) SetIdentity(identity *identityPkg.Identity) (identityToRelease *identityPkg.Identity) {
 	oldIdentity := "no identity"
 	if e.SecurityIdentity != nil {
-		oldIdentity = e.SecurityIdentity.StringID()
+		oldIdentity = e.SecurityIdentity.String()
 	}
 
 	// Current security identity for endpoint is its old identity - delete its
@@ -1193,16 +1200,16 @@ func (e *Endpoint) SetIdentity(identity *identityPkg.Identity) (identityToReleas
 		e.runIPIdentitySync(e.IPv6)
 	}
 
-	if oldIdentity != identity.StringID() {
+	if oldIdentity != identity.String() {
 		e.getLogger().Info(
 			"Identity of endpoint changed",
-			logfields.IdentityNew, identity.StringID(),
+			logfields.IdentityNew, identity,
 			logfields.IdentityOld, oldIdentity,
 			logfields.IdentityLabels, map[string]labels.Label(identity.Labels),
 		)
 	}
 	e.UpdateLogger(map[string]any{
-		logfields.Identity: identity.StringID(),
+		logfields.Identity: identity.String(),
 	})
 	return identityToRelease
 }

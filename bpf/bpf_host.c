@@ -294,8 +294,8 @@ handle_ipv6_cont(struct __ctx_buff *ctx, __u32 secctx, const bool from_host,
 		if (from_host) {
 			bool is_host_id = from_host_raw & FROM_HOST_FLAG_HOST_ID;
 
-			ret = __ipv6_host_policy_egress(ctx, is_host_id, false, ip6, ct_buffer,
-							&trace, ext_err);
+			ret = __ipv6_host_policy_egress(ctx, is_host_id, from_proxy, ip6,
+							ct_buffer, &trace, ext_err);
 		} else {
 			ret = __ipv6_host_policy_ingress(ctx, ip6, ct_buffer, &remote_id, &trace,
 							 ext_err);
@@ -719,8 +719,8 @@ handle_ipv4_cont(struct __ctx_buff *ctx, __u32 secctx, const bool from_host,
 		if (from_host) {
 			bool is_host_id = from_host_raw & FROM_HOST_FLAG_HOST_ID;
 
-			ret = __ipv4_host_policy_egress(ctx, is_host_id, false, ip4, ct_buffer,
-							&trace, ext_err);
+			ret = __ipv4_host_policy_egress(ctx, is_host_id, from_proxy, ip4,
+							ct_buffer, &trace, ext_err);
 		} else {
 			ret = __ipv4_host_policy_ingress(ctx, ip4, ct_buffer, &remote_id, &trace,
 							 ext_err);
@@ -1067,7 +1067,6 @@ do_netdev(struct __ctx_buff *ctx, __be16 proto, __u32 identity,
 			if (likely(hdrlen > 0) &&
 			    ctx_is_wireguard(ctx, ETH_HLEN + hdrlen, next_proto, identity)) {
 				trace.reason = TRACE_REASON_ENCRYPTED;
-				set_decrypt_mark(ctx, 0);
 			}
 		}
 # endif /* ENABLE_WIREGUARD */
@@ -1107,7 +1106,6 @@ do_netdev(struct __ctx_buff *ctx, __be16 proto, __u32 identity,
 			hdrlen = ipv4_hdrlen(ip4);
 			if (ctx_is_wireguard(ctx, ETH_HLEN + hdrlen, next_proto, identity)) {
 				trace.reason = TRACE_REASON_ENCRYPTED;
-				set_decrypt_mark(ctx, 0);
 			}
 		}
 #endif /* ENABLE_WIREGUARD */
@@ -1241,7 +1239,7 @@ int cil_from_netdev(struct __ctx_buff *ctx)
 #endif
 	ret = tcx_early_hook(ctx, proto);
 	if (ret != CTX_ACT_OK)
-		return ret;
+		goto drop_err;
 
 	return do_netdev(ctx, proto, UNKNOWN_ID, TRACE_FROM_NETWORK, false);
 drop_err:
@@ -1883,7 +1881,7 @@ int cil_host_policy(struct __ctx_buff *ctx __maybe_unused)
 		if (IS_ERR(ret))
 			goto drop_err;
 
-		local_delivery_fill_meta(ctx, src_sec_identity, false,
+		local_delivery_fill_meta(ctx, src_sec_identity, false, false,
 					 true, false, 0);
 		ret = tail_call_policy(ctx, (__u16)lxc_id);
 	} else {

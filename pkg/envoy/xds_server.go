@@ -48,6 +48,7 @@ import (
 	policyTypes "github.com/cilium/cilium/pkg/policy/types"
 	"github.com/cilium/cilium/pkg/promise"
 	"github.com/cilium/cilium/pkg/proxy/endpoint"
+	"github.com/cilium/cilium/pkg/revert"
 	"github.com/cilium/cilium/pkg/time"
 	"github.com/cilium/cilium/pkg/u8proto"
 )
@@ -117,15 +118,10 @@ type XDSServer interface {
 	// responds.
 	DeleteEnvoyResources(ctx context.Context, resources Resources) error
 
-	// GetNetworkPolicies returns the current version of the network policies with the given names.
-	// If resourceNames is empty, all resources are returned.
-	//
-	// Only used for testing
-	GetNetworkPolicies(resourceNames []string) (map[string]*cilium.NetworkPolicy, error)
 	// UpdateNetworkPolicy adds or updates a network policy in the set published to L7 proxies.
 	// When the proxy acknowledges the network policy update, it will result in
 	// a subsequent call to the endpoint's OnProxyPolicyUpdate() function.
-	UpdateNetworkPolicy(ep endpoint.EndpointUpdater, policy *policy.EndpointPolicy, wg *completion.WaitGroup) (error, func() error)
+	UpdateNetworkPolicy(ep endpoint.EndpointUpdater, policy *policy.EndpointPolicy, wg *completion.WaitGroup) (error, revert.RevertFunc, revert.FinalizeFunc)
 	// RemoveNetworkPolicy removes network policies relevant to the specified
 	// endpoint from the set published to L7 proxies, and stops listening for
 	// acks for policies on this endpoint.
@@ -1810,13 +1806,22 @@ func getNodeIDs(ep endpoint.EndpointUpdater, policy *policy.L4Policy) []string {
 // implemented by Cilium.
 var ErrNilPolicy = errors.New("nil EndpointPolicy")
 
+// UpdateNetworkPolicy returns nil revert/finalize funcs with synchronous errors.
 func (s *xdsServer) UpdateNetworkPolicy(ep endpoint.EndpointUpdater, epp *policy.EndpointPolicy, wg *completion.WaitGroup,
-) (error, func() error) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
+) (error, revert.RevertFunc, revert.FinalizeFunc) {
 	if epp == nil {
-		return ErrNilPolicy, nil
+		return ErrNilPolicy, nil, nil
+	}
+
+	names := ep.GetPolicyNames()
+	if len(names) == 0 {
+		// It looks like the "host EP" (identity == 1) has no IPs, so it is possible to find
+		// there are no policy names here. In this case just skip without updating a policy.
+		s.logger.Debug("Endpoint has no policy names",
+			logfields.Name, names,
+			logfields.EndpointID, ep.GetID(),
+		)
+		return nil, func() error { return nil }, func() {}
 	}
 
 	l4policy := &epp.SelectorPolicy.L4Policy
@@ -1826,30 +1831,36 @@ func (s *xdsServer) UpdateNetworkPolicy(ep endpoint.EndpointUpdater, epp *policy
 
 	// Error out if the selectors are no longer valid
 	if !selectors.IsValid() {
-		return policy.ErrStaleSelectors, nil
+		return policy.ErrStaleSelectors, nil, nil
 	}
 
-	ips := ep.GetPolicyNames()
-	if len(ips) == 0 {
-		// It looks like the "host EP" (identity == 1) has no IPs, so it is possible to find
-		// there are no IPs here. In this case just skip without updating a policy, as
-		// policies are always keyed by an IP.
-		//
-		// TODO: When L7 policy support for the host is needed, all host IPs should be
-		// considered here?
-		s.logger.Debug("Endpoint has no IP addresses or name",
-			logfields.Name, ips,
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	// Update local endpoint IP/policy mapping for access log correlation and log any conflicts.
+	// This is done even if policy update fails, as this information only depends on the
+	// existence of the endpoint and does not need to be reverted even if policy update fails.
+	conflicts := s.localEndpointStore.setLocalEndpoint(ep)
+	if len(conflicts) > 0 {
+		s.logger.Error("Conflicting policy names detected while updating local endpoint store",
 			logfields.EndpointID, ep.GetID(),
+			logfields.Info, conflicts,
 		)
-		return nil, func() error { return nil }
+
+		// remove conflicting policies
+		for _, dup := range conflicts {
+			// We use the string form of the Endpoint's ID as the xDS resource name.
+			dupName := strconv.FormatUint(dup.ep.GetID(), 10)
+			s.networkPolicyMutator.Delete(NetworkPolicyTypeURL, dupName, nil, nil, nil)
+		}
 	}
 
-	networkPolicy := s.getNetworkPolicy(ep, selectors, ips, l4policy, ingressPolicyEnforced, egressPolicyEnforced, s.config.useFullTLSContext, s.config.useSDS, s.secretManager.GetSecretSyncNamespace())
+	networkPolicy := s.getNetworkPolicy(ep, selectors, names, l4policy, ingressPolicyEnforced, egressPolicyEnforced, s.config.useFullTLSContext, s.config.useSDS, s.secretManager.GetSecretSyncNamespace())
 
 	// First, validate the policy
 	err := networkPolicy.Validate()
 	if err != nil {
-		return fmt.Errorf("error validating generated NetworkPolicy for %d/%s: %w", ep.GetID(), ep.GetPolicyNames(), err), nil
+		return fmt.Errorf("error validating generated NetworkPolicy for %d/%s: %w", ep.GetID(), ep.GetPolicyNames(), err), nil, nil
 	}
 
 	// If there are no listeners configured, the local node's Envoy proxy won't
@@ -1860,44 +1871,35 @@ func (s *xdsServer) UpdateNetworkPolicy(ep endpoint.EndpointUpdater, epp *policy
 	}
 
 	// When successful, push policy into the cache.
-	var callback func(error)
 	policyRevision := l4policy.Revision
-	callback = func(err error) {
+	callback := func(err error) {
 		if err == nil {
 			go ep.OnProxyPolicyUpdate(policyRevision)
 		}
 	}
-
 	epID := ep.GetID()
 	nodeIDs := getNodeIDs(ep, l4policy)
 	resourceName := strconv.FormatUint(epID, 10)
 	revertFunc := s.networkPolicyMutator.Upsert(NetworkPolicyTypeURL, resourceName, networkPolicy, nodeIDs, wg, callback)
-	revertUpdatedNetworkPolicyEndpoints := make(map[string]endpoint.EndpointUpdater, len(ips))
-	for _, ip := range ips {
-		revertUpdatedNetworkPolicyEndpoints[ip] = s.localEndpointStore.getLocalEndpoint(ip)
-		s.localEndpointStore.setLocalEndpoint(ip, ep)
-	}
 
 	return nil, func() error {
-		s.logger.Debug("Reverting xDS network policy update")
+			s.logger.Debug("Reverting xDS network policy update",
+				logfields.EndpointID, epID,
+			)
 
-		s.mutex.Lock()
-		defer s.mutex.Unlock()
+			s.mutex.Lock()
+			defer s.mutex.Unlock()
 
-		for ip, ep := range revertUpdatedNetworkPolicyEndpoints {
-			if ep == nil {
-				s.localEndpointStore.removeLocalEndpoint(ip)
-			} else {
-				s.localEndpointStore.setLocalEndpoint(ip, ep)
-			}
+			revertFunc()
+
+			s.logger.Debug("Finished reverting xDS network policy update")
+
+			return nil
+		}, func() {
+			s.logger.Debug("Finalizing xDS network policy update",
+				logfields.EndpointID, epID,
+			)
 		}
-
-		revertFunc()
-
-		s.logger.Debug("Finished reverting xDS network policy update")
-
-		return nil
-	}
 }
 
 func (s *xdsServer) RemoveNetworkPolicy(ep endpoint.EndpointInfoSource) {
@@ -1911,35 +1913,11 @@ func (s *xdsServer) RemoveNetworkPolicy(ep endpoint.EndpointInfoSource) {
 	// ignored.
 	s.networkPolicyMutator.Delete(NetworkPolicyTypeURL, resourceName, nil, nil, nil)
 
-	ip := ep.GetIPv6Address()
-	if ip != "" {
-		s.localEndpointStore.removeLocalEndpoint(ip)
-	}
-	ip = ep.GetIPv4Address()
-	if ip != "" {
-		s.localEndpointStore.removeLocalEndpoint(ip)
-		// Delete node resources held in the cache for the endpoint
-		s.networkPolicyMutator.DeleteNode(ip)
-	}
+	s.localEndpointStore.removeLocalEndpoint(ep)
 }
 
 func (s *xdsServer) RemoveAllNetworkPolicies() {
 	s.networkPolicyCache.Clear(NetworkPolicyTypeURL)
-}
-
-func (s *xdsServer) GetNetworkPolicies(resourceNames []string) (map[string]*cilium.NetworkPolicy, error) {
-	resources, err := s.networkPolicyCache.GetResources(NetworkPolicyTypeURL, 0, "", resourceNames)
-	if err != nil {
-		return nil, err
-	}
-	networkPolicies := make(map[string]*cilium.NetworkPolicy, len(resources.Resources))
-	for _, res := range resources.Resources {
-		networkPolicy := res.(*cilium.NetworkPolicy)
-		for _, ip := range networkPolicy.EndpointIps {
-			networkPolicies[ip] = networkPolicy
-		}
-	}
-	return networkPolicies, nil
 }
 
 // Resources contains all Envoy resources parsed from a CiliumEnvoyConfig CRD

@@ -24,6 +24,7 @@ import (
 	fakeendpoint "github.com/cilium/cilium/pkg/endpoint/fake"
 	endpoint "github.com/cilium/cilium/pkg/endpoint/types"
 	"github.com/cilium/cilium/pkg/eventqueue"
+	fqdnrestore "github.com/cilium/cilium/pkg/fqdn/restore"
 	"github.com/cilium/cilium/pkg/identity/cache"
 	"github.com/cilium/cilium/pkg/identity/identitymanager"
 	"github.com/cilium/cilium/pkg/ipcache"
@@ -40,6 +41,7 @@ import (
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/policy"
 	"github.com/cilium/cilium/pkg/policy/api"
+	proxyendpoint "github.com/cilium/cilium/pkg/proxy/endpoint"
 	"github.com/cilium/cilium/pkg/testutils"
 	testidentity "github.com/cilium/cilium/pkg/testutils/identity"
 	testipcache "github.com/cilium/cilium/pkg/testutils/ipcache"
@@ -775,6 +777,24 @@ func TestWaitForPolicyRevision(t *testing.T) {
 	require.Empty(t, e.policyRevisionSignals)
 }
 
+func TestDeleteRemovesNetworkPolicyWhenIdentityReleaseIsSkipped(t *testing.T) {
+	p := createTestEndpointParams(t)
+	proxy := &recordingRemoveNetworkPolicyProxy{}
+
+	ep, err := NewEndpointFromChangeModel(p, noopDNSRulesAPI{}, proxy, newTestEndpointModel(1234, StateReady), nil)
+	require.NoError(t, err)
+
+	ep.Start(uint16(ep.ID))
+
+	errs := ep.Delete(DeleteConfig{
+		NoIdentityRelease: true,
+		NoIPRelease:       true,
+	})
+	require.Empty(t, errs)
+	require.Equal(t, 1, proxy.calls)
+	require.Equal(t, uint64(ep.ID), proxy.lastEndpointID)
+}
+
 func TestProxyID(t *testing.T) {
 	setupEndpointSuite(t)
 
@@ -914,8 +934,8 @@ func TestEndpointEventQueueDeadlockUponStop(t *testing.T) {
 	ep.Start(uint16(model.ID))
 	t.Cleanup(ep.Stop)
 
-	ep.properties[PropertyFakeEndpoint] = true
-	ep.properties[PropertySkipBPFPolicy] = true
+	ep.properties[endpoint.PropertyFakeEndpoint] = true
+	ep.properties[endpoint.PropertySkipBPFPolicy] = true
 
 	// In case deadlock occurs, provide a timeout of 3 (number of events) *
 	// deadlockTimeout + 1 seconds to ensure that we are actually testing for
@@ -1085,9 +1105,26 @@ func newTestEndpointModel(id int, state State) *models.EndpointChangeRequest {
 		ID:    int64(id),
 		State: ptr.To(models.EndpointState(state)),
 		Properties: map[string]any{
-			PropertyFakeEndpoint: true,
+			endpoint.PropertyFakeEndpoint: true,
 		},
 	}
+}
+
+type noopDNSRulesAPI struct{}
+
+func (noopDNSRulesAPI) GetDNSRules(uint16) fqdnrestore.DNSRules { return nil }
+
+func (noopDNSRulesAPI) RemoveRestoredDNSRules(uint16) {}
+
+type recordingRemoveNetworkPolicyProxy struct {
+	FakeEndpointProxy
+	calls          int
+	lastEndpointID uint64
+}
+
+func (p *recordingRemoveNetworkPolicyProxy) RemoveNetworkPolicy(ep proxyendpoint.EndpointInfoSource) {
+	p.calls++
+	p.lastEndpointID = ep.GetID()
 }
 
 //TODODODODO

@@ -43,7 +43,7 @@ type FrontendParams struct {
 	// ServicePort is the associated "ClusterIP" port of this frontend.
 	// Same as [Address.L4Addr.Port] except when [Type] NodePort or
 	// LoadBalancer. This is used to match frontends with the [Ports] of
-	// [Service.ProxyRedirect].
+	// [Service.ProxyRedirects].
 	ServicePort uint16
 }
 
@@ -101,6 +101,17 @@ func (s BackendsSeq2) MarshalYAML() (any, error) {
 func (fe *Frontend) Clone() *Frontend {
 	fe2 := *fe
 	return &fe2
+}
+
+// IsWildcardCandidate returns true if the frontend is structurally eligible
+// to parent a wildcard service entry.
+func IsWildcardCandidate(fe *Frontend) bool {
+	switch fe.Type {
+	case SVCTypeLoadBalancer, SVCTypeClusterIP:
+		return fe.Address.Scope() == ScopeExternal
+	default:
+		return false
+	}
 }
 
 func (fe *Frontend) TableHeader() []string {
@@ -190,7 +201,7 @@ func (fe *Frontend) ToModel() *models.Service {
 		spec.BackendAddresses = append(spec.BackendAddresses, backendModel(be))
 	}
 
-	if svc.ProxyRedirect != nil {
+	if pr := svc.ProxyRedirects.ForPort(fe.ServicePort); pr != nil {
 		state, _ := BackendStateActive.String()
 		localhost := "127.0.0.1"
 		if fe.Address.AddrCluster().Is6() {
@@ -200,7 +211,7 @@ func (fe *Frontend) ToModel() *models.Service {
 		spec.BackendAddresses = append(spec.BackendAddresses, &models.BackendAddress{
 			IP:        &localhost,
 			Protocol:  fe.Address.Protocol(),
-			Port:      svc.ProxyRedirect.ProxyPort,
+			Port:      pr.ProxyPort,
 			State:     state,
 			Preferred: true,
 		})

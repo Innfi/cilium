@@ -251,7 +251,7 @@ manifests: ## Generate K8s manifests e.g. CRD, RBAC etc.
 	contrib/scripts/k8s-manifests-gen.sh
 
 .PHONY: generate-apis
-generate-apis: generate-api generate-health-api generate-hubble-api generate-operator-api generate-kvstoremesh-api generate-sdp-api generate-datapathplugins-api
+generate-apis: generate-api generate-health-api generate-hubble-api generate-operator-api generate-kvstoremesh-api generate-sdp-api generate-datapathplugins-api generate-clustermesh-api
 
 generate-api: api/v1/openapi.yaml ## Generate cilium-agent client, model and server code from openapi spec.
 	@$(ECHO_GEN)api/v1/openapi.yaml
@@ -363,6 +363,26 @@ github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1beta1
 github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/util/intstr
 endef
 
+define CLUSTERMESH_PROTO_PACKAGES
+-github.com/cilium/cilium/pkg/k8s/slim/k8s/api/discovery/v1
+github.com/cilium/cilium/pkg/clustermesh/types/endpointslice/internal
+endef
+
+.PHONY: generate-clustermesh-api-local
+generate-clustermesh-api-local:
+	$(ASSERT_CILIUM_MODULE)
+
+	$(eval TMPDIR := $(shell mktemp -d -t cilium.tmpXXXXXXXX))
+
+	$(QUIET) $(call generate_k8s_protobuf,${CLUSTERMESH_PROTO_PACKAGES},"$(TMPDIR)")
+
+	$(QUIET) rm -rf "$(TMPDIR)"
+
+.PHONY: generate-clustermesh-api
+generate-clustermesh-api:
+	contrib/scripts/builder.sh \
+		$(MAKE_CONTAINER) -C /go/src/github.com/cilium/cilium/ generate-clustermesh-api-local
+
 .PHONY: generate-k8s-api-local
 generate-k8s-api-local:
 	$(ASSERT_CILIUM_MODULE)
@@ -405,14 +425,23 @@ govet: ## Run govet on Go source files in the repository.
 	@$(ECHO_CHECK) vetting all packages...
 	$(QUIET) $(GO_VET) ./...
 
-.PHONY: custom-lint
-custom-lint: ## Run extra local linters
+.PHONY: custom-lint metrics-lint cloud-dep-check statedb-lint
+custom-lint: metrics-lint statedb-lint cloud-dep-check ## Run extra local linters
+
+metrics-lint:
 	$(ECHO_CHECK) metricslint
 	$(QUIET)$(MAKE) -C tools/metricslint
 	$(QUIET)tools/metricslint/metricslint ./...
+
+cloud-dep-check:
 	$(ECHO_CHECK) cloud-dep-check
 	$(QUIET)$(MAKE) -C tools/cloud-dep-check
 	$(QUIET)tools/cloud-dep-check/cilium-cloud-dep-check -root .
+
+statedb-lint:
+	$(ECHO_CHECK) statedblint
+	$(QUIET)$(MAKE) -C tools/statedblint
+	$(QUIET)tools/statedblint/statedblint ./...
 
 golangci-lint: ## Run golangci-lint
 ifneq (,$(findstring $(GOLANGCILINT_WANT_VERSION:v%=%),$(GOLANGCILINT_VERSION)))
@@ -503,8 +532,6 @@ endif
 	$(QUIET) contrib/scripts/check-datapathconfig.sh
 	@$(ECHO_CHECK) $(GO) run ./tools/slogloggercheck .
 	$(QUIET)$(GO) run ./tools/slogloggercheck .
-	@$(ECHO_CHECK) contrib/scripts/check-fipsonly.sh
-	$(QUIET) contrib/scripts/check-fipsonly.sh
 	$(MAKE) check-fuzz
 
 pprof-heap: ## Get Go pprof heap profile.
@@ -599,6 +626,8 @@ mcs-api-conformance: ## Run MCS-API conformance tests.
 	@$(ECHO_CHECK) running MCS-API conformance tests...
 	MCS_API_CONFORMANCE_TESTS=1 \
 	$(GO_TEST) $(GO_TEST_FLAGS) -p 4 -v ./pkg/clustermesh/mcsapi/conformance \
+		-organization Cilium -project Cilium -url 'https://cilium.io/' \
+		-version "$(VERSION)"  \
 		$(MCS_API_TEST_FLAGS) \
 		-test.run $(MCS_API_CONFORMANCE_TEST_NAME) \
 	| $(GOTEST_FORMATTER)

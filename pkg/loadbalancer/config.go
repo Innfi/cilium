@@ -14,8 +14,10 @@ import (
 
 	"github.com/cilium/hive/cell"
 
+	"github.com/cilium/cilium/pkg/datapath/tunnel"
 	"github.com/cilium/cilium/pkg/kpr"
 	"github.com/cilium/cilium/pkg/lbipamconfig"
+	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/nodeipamconfig"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/time"
@@ -226,6 +228,14 @@ type UserConfig struct {
 	// Enable dynamic source IP resolution for SNAT via linux's routing table.
 	// The kernel must support this feature.
 	NodePortEnableDynamicSourceLookup bool `mapstructure:"enable-dynamic-source-lookup-nodeport"`
+
+	// ReflectorWaitTime is the maximum amount of time the K8s reflector waits
+	// to fill its events buffer. A higher wait time will reduce processing of
+	// transient states and increases throughput as it gives bigger batches
+	// downstream for processing. Batching also helps to combine related
+	// objects, e.g. a Service may have multiple associated EndpointSlices and
+	// preferably these would be processed together.
+	ReflectorWaitTime time.Duration `mapstructure:"lb-reflector-wait-time"`
 }
 
 // ConfigCell provides the [Config] and [ExternalConfig] configurations.
@@ -238,6 +248,19 @@ var ConfigCell = cell.Group(
 
 		// Validate and populate [loadbalancer.userConfig] to produce the final [loadbalancer.Config]
 		NewConfig,
+
+		// Enable tunnel configuration when DSR Geneve is enabled.
+		func(kpr kpr.KPRConfig, lbcfg Config) tunnel.EnablerOut {
+			return tunnel.NewEnabler(
+				kpr.KubeProxyReplacement &&
+					lbcfg.LoadBalancerUsesDSR() &&
+					lbcfg.DSRDispatch == DSRDispatchGeneve,
+				// The datapath logic takes care of the MTU overhead. So no need to
+				// take it into account here.
+				// See encap_geneve_dsr_opt[4,6] in nodeport.h
+				tunnel.WithoutMTUAdaptation(),
+			)
+		},
 	),
 )
 
@@ -318,7 +341,11 @@ func (def UserConfig) Flags(flags *pflag.FlagSet) {
 	flags.Duration("lb-init-wait-timeout", def.InitWaitTimeout, "Amount of time to wait for initialization before reconciling BPF maps")
 	flags.MarkHidden("lb-init-wait-timeout")
 
+	flags.Duration("lb-reflector-wait-time", def.ReflectorWaitTime, "Maximum time the K8s reflector waits to fill its event buffer")
+	flags.MarkHidden("lb-reflector-wait-time")
+
 	flags.Bool(NodePortEnableDynamicSourceLookup, def.NodePortEnableDynamicSourceLookup, "Enable dynamic source IP resolution for SNAT via linux's routing table. The kernel must support this feature.")
+
 }
 
 // NewConfig takes the user-provided configuration, validates and processes it to produce the final
@@ -350,7 +377,10 @@ func NewConfig(log *slog.Logger, userConfig UserConfig, dcfg *option.DaemonConfi
 	if cfg.LBSockRevNatEntries == 0 {
 		getEntries := dcfg.GetDynamicSizeCalculator(log)
 		cfg.LBSockRevNatEntries = getEntries(option.SockRevNATMapEntriesDefault, option.LimitTableAutoSockRevNatMin, option.LimitTableMax)
-		log.Info(fmt.Sprintf("option %s set by dynamic sizing to %v", LBSockRevNatEntriesName, cfg.LBSockRevNatEntries)) // FIXME
+		log.Info("Option set by dynamic sizing",
+			logfields.Option, LBSockRevNatEntriesName,
+			logfields.Value, cfg.LBSockRevNatEntries,
+		)
 	}
 
 	cfg.LBSockRevNatEntries = dcfg.AlignMapSizeForLRU(log, LBSockRevNatEntriesName, cfg.LBSockRevNatEntries)
@@ -422,6 +452,10 @@ func NewConfig(log *slog.Logger, userConfig UserConfig, dcfg *option.DaemonConfi
 		return Config{}, fmt.Errorf("The value --%s=%s is not supported as default under annotation mode", LoadBalancerModeName, cfg.LBMode)
 	}
 
+	if cfg.ReflectorWaitTime <= 0 {
+		return Config{}, fmt.Errorf("--lb-reflector-wait-time must be greater than 0, got %s", cfg.ReflectorWaitTime)
+	}
+
 	/* FIXME:
 
 	if cfg.NodePortMode == option.NodePortModeDSR &&
@@ -481,7 +515,8 @@ var DefaultUserConfig = UserConfig{
 
 	EnableServiceTopology: false,
 
-	InitWaitTimeout: 1 * time.Minute,
+	InitWaitTimeout:   1 * time.Minute,
+	ReflectorWaitTime: 500 * time.Millisecond,
 }
 
 var DefaultConfig = Config{

@@ -11,7 +11,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/cilium/hive/script"
-	"github.com/osrg/gobgp/v3/pkg/packet/bgp"
+	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
 	"github.com/spf13/pflag"
 
 	"github.com/cilium/cilium/pkg/bgp/agent"
@@ -130,7 +130,7 @@ func PrintRoutes(tw *tabwriter.Writer, instances []agent.InstanceRoutes, printPe
 					Prefix:   route.Prefix,
 					NextHop:  api.NextHopFromPathAttributes(path.PathAttributes),
 					Best:     strconv.FormatBool(path.Best),
-					Age:      time.Duration(path.AgeNanoseconds).Truncate(time.Second).String(),
+					Age:      path.Age().Round(time.Second).String(),
 					Attrs:    FormatPathAttributes(path.PathAttributes),
 				}
 				if noAge {

@@ -56,11 +56,11 @@ Listed below are the actively maintained release branches along with their lates
 patch release, corresponding image pull tags and their release notes:
 
 +---------------------------------------------------------+------------+------------------------------------+----------------------------------------------------------------------------+
-| `v1.19 <https://github.com/cilium/cilium/tree/v1.19>`__ | 2026-04-15 | ``quay.io/cilium/cilium:v1.19.3``  | `Release Notes <https://github.com/cilium/cilium/releases/tag/v1.19.3>`__  |
+| `v1.19 <https://github.com/cilium/cilium/tree/v1.19>`__ | 2026-05-13 | ``quay.io/cilium/cilium:v1.19.4``  | `Release Notes <https://github.com/cilium/cilium/releases/tag/v1.19.4>`__  |
 +---------------------------------------------------------+------------+------------------------------------+----------------------------------------------------------------------------+
-| `v1.18 <https://github.com/cilium/cilium/tree/v1.18>`__ | 2026-04-15 | ``quay.io/cilium/cilium:v1.18.9``  | `Release Notes <https://github.com/cilium/cilium/releases/tag/v1.18.9>`__  |
+| `v1.18 <https://github.com/cilium/cilium/tree/v1.18>`__ | 2026-05-13 | ``quay.io/cilium/cilium:v1.18.10`` | `Release Notes <https://github.com/cilium/cilium/releases/tag/v1.18.10>`__ |
 +---------------------------------------------------------+------------+------------------------------------+----------------------------------------------------------------------------+
-| `v1.17 <https://github.com/cilium/cilium/tree/v1.17>`__ | 2026-04-15 | ``quay.io/cilium/cilium:v1.17.15`` | `Release Notes <https://github.com/cilium/cilium/releases/tag/v1.17.15>`__ |
+| `v1.17 <https://github.com/cilium/cilium/tree/v1.17>`__ | 2026-05-13 | ``quay.io/cilium/cilium:v1.17.16`` | `Release Notes <https://github.com/cilium/cilium/releases/tag/v1.17.16>`__ |
 +---------------------------------------------------------+------------+------------------------------------+----------------------------------------------------------------------------+
 
 Architectures
@@ -306,7 +306,7 @@ and the `2-Clause BSD License <bsd-license_>`__
 .. _Prerequisites: https://docs.cilium.io/en/stable/operations/system_requirements/
 .. _eBPF: https://ebpf.io
 .. _eBPF.io: https://ebpf.io
-.. _Meeting Notes and Zoom Info: https://docs.google.com/document/d/1Y_4chDk4rznD6UgXPlPvn3Dc7l-ZutGajUv1eF0VDwQ/edit#
+.. _Meeting Notes and Zoom Info: https://docs.google.com/document/d/1IqLRvTvnK5SQ1SMM8g8R_k2TeeRUwWmOYqjYWZs6MiM/edit#
 .. _APAC Meeting Notes and Zoom Info: https://docs.google.com/document/d/1egv4qLydr0geP-GjQexYKm4tz3_tHy-LCBjVQcXcT5M/edit#
 
 .. |go-report| image:: https://goreportcard.com/badge/github.com/cilium/cilium

@@ -13,18 +13,20 @@ export CI_ORG ?= cilium
 
 ifeq ($(RELEASE),yes)
     export PULL_POLICY:=IfNotPresent
-    export CILIUM_REPO:=${RELEASE_REGISTRY}/${RELEASE_ORG}/cilium
-    export CILIUM_OPERATOR_BASE_REPO:=${RELEASE_REGISTRY}/${RELEASE_ORG}/operator
-    export CLUSTERMESH_APISERVER_REPO:=${RELEASE_REGISTRY}/${RELEASE_ORG}/clustermesh-apiserver
-    export HUBBLE_RELAY_REPO:=${RELEASE_REGISTRY}/${RELEASE_ORG}/hubble-relay
+    export REGISTRY_REPO_PREFIX ?= ${RELEASE_REGISTRY}/${RELEASE_ORG}
+    export CILIUM_REPO ?= ${REGISTRY_REPO_PREFIX}/cilium
+    export CILIUM_OPERATOR_BASE_REPO ?= ${REGISTRY_REPO_PREFIX}/operator
+    export CLUSTERMESH_APISERVER_REPO ?= ${REGISTRY_REPO_PREFIX}/clustermesh-apiserver
+    export HUBBLE_RELAY_REPO?=${REGISTRY_REPO_PREFIX}/hubble-relay
 else
     export PULL_POLICY:=Always
-    export CILIUM_REPO:=${CI_REGISTRY}/${CI_ORG}/cilium-ci
-    export CILIUM_OPERATOR_BASE_REPO:=${CI_REGISTRY}/${CI_ORG}/operator
-    export CILIUM_OPERATOR_SUFFIX=-ci
-    export CILIUM_VERSION:=latest
-    export CLUSTERMESH_APISERVER_REPO:=${CI_REGISTRY}/${CI_ORG}/clustermesh-apiserver-ci
-    export HUBBLE_RELAY_REPO:=${CI_REGISTRY}/${CI_ORG}/hubble-relay-ci
+    export REGISTRY_REPO_PREFIX ?= ${CI_REGISTRY}/${CI_ORG}
+    export CILIUM_VERSION ?= latest
+    export CILIUM_REPO ?= ${REGISTRY_REPO_PREFIX}/cilium-ci
+    export CILIUM_OPERATOR_BASE_REPO ?= ${REGISTRY_REPO_PREFIX}/operator
+    export CILIUM_OPERATOR_SUFFIX = -ci
+    export CLUSTERMESH_APISERVER_REPO ?= ${REGISTRY_REPO_PREFIX}/clustermesh-apiserver-ci
+    export HUBBLE_RELAY_REPO ?= ${REGISTRY_REPO_PREFIX}/hubble-relay-ci
 endif
 
 # renovate: datasource=docker
@@ -39,8 +41,8 @@ export CILIUM_NODEINIT_DIGEST?=sha256:bf1944bbdfd073bbb2b8d9c5baa315267a552aec69
 
 # renovate: datasource=docker
 export CILIUM_ENVOY_REPO?=quay.io/cilium/cilium-envoy
-export CILIUM_ENVOY_VERSION?=v1.36.6-1776352947-78da350f53f63526ff6487f2e1f3b14d2062ce17
-export CILIUM_ENVOY_DIGEST?=sha256:8994e3064f463087bbfae1daeecd082840ccb0e2addb92979d4da61252764555
+export CILIUM_ENVOY_VERSION?=v1.37.2-1778236003-7c2f6580d32e50f1a6866c12122662856f54eec2
+export CILIUM_ENVOY_DIGEST?=sha256:c5fd228f5f6f72c21341384ac7ba9654db73b0931f5c6ac0c505960975f56f48
 
 # renovate: datasource=docker
 export HUBBLE_UI_BACKEND_REPO?=quay.io/cilium/hubble-ui-backend

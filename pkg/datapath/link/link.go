@@ -13,7 +13,6 @@ import (
 	"github.com/cilium/hive/job"
 	"github.com/vishvananda/netlink"
 
-	"github.com/cilium/cilium/pkg/controller"
 	"github.com/cilium/cilium/pkg/datapath/linux/safenetlink"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/mac"
@@ -50,6 +49,16 @@ func Rename(curName, newName string) error {
 	return netlink.LinkSetName(link, newName)
 }
 
+// SetAltNames sets the altnames for a link
+func AddAltName(linkName, altName string) error {
+	link, err := safenetlink.LinkByName(linkName)
+	if err != nil {
+		return err
+	}
+
+	return netlink.LinkAddAltName(link, altName)
+}
+
 func GetHardwareAddr(ifName string) (mac.MAC, error) {
 	iface, err := safenetlink.LinkByName(ifName)
 	if err != nil {
@@ -77,7 +86,6 @@ func GetIfBufferMargins(ifName string) (uint16, uint16, error) {
 type LinkCache struct {
 	mu          lock.RWMutex
 	indexToName map[int]string
-	manager     *controller.Manager
 }
 
 var Cell = cell.Module(
@@ -95,7 +103,6 @@ type linkCacheParams struct {
 func NewLinkCache() *LinkCache {
 	return &LinkCache{
 		indexToName: make(map[int]string),
-		manager:     controller.NewManager(),
 	}
 }
 

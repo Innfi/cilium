@@ -758,6 +758,7 @@ data:
     {{- end }}
   {{- else if eq .Values.encryption.type "ztunnel" }}
   enable-ztunnel: {{ .Values.encryption.enabled | quote }}
+  ztunnel-ca-type: {{ .Values.encryption.ztunnel.ca.type | quote }}
   {{- end }}
   {{- if .Values.encryption.nodeEncryption }}
   encrypt-node: {{ .Values.encryption.nodeEncryption | quote }}
@@ -826,9 +827,7 @@ data:
   enable-nat46x64-gateway: {{ .Values.nat46x64Gateway.enabled | quote }}
 {{- end }}
 
-{{- if and .Values.hostFirewall .Values.hostFirewall.enabled }}
   enable-host-firewall: {{ .Values.hostFirewall.enabled | quote }}
-{{- end}}
 
 {{- if hasKey .Values "devices" }}
   # List of devices used to attach bpf_host.o (implements BPF NodePort,
@@ -890,9 +889,6 @@ data:
   enable-auto-protect-node-port-range: {{ .Values.nodePort.autoProtectPortRange | quote }}
 {{- end }}
 {{- if hasKey .Values "loadBalancer" }}
-{{- if .Values.loadBalancer.standalone }}
-  bpf-lb-only: {{ .Values.loadBalancer.standalone | quote }}
-{{- end }}
 {{- if hasKey .Values.loadBalancer "mode" }}
   bpf-lb-mode: {{ .Values.loadBalancer.mode | quote }}
 {{- end }}
@@ -907,6 +903,9 @@ data:
 {{- end }}
 {{- if hasKey .Values.loadBalancer "serviceTopology" }}
   enable-service-topology: {{ .Values.loadBalancer.serviceTopology | quote }}
+{{- end }}
+{{- if hasKey .Values.loadBalancer "reflectorWaitTime" }}
+  lb-reflector-wait-time: {{ .Values.loadBalancer.reflectorWaitTime | quote }}
 {{- end }}
 {{- end }}
 
@@ -1289,8 +1288,6 @@ data:
   enable-l2-pod-announcements: {{ .Values.l2podAnnouncements.enabled | quote }}
   {{- if .Values.l2podAnnouncements.interfacePattern }}
   l2-pod-announcements-interface-pattern: {{ .Values.l2podAnnouncements.interfacePattern | quote }}
-  {{- else }}
-  l2-pod-announcements-interface: {{ .Values.l2podAnnouncements.interface | quote }}
   {{- end }}
 {{- end }}
 

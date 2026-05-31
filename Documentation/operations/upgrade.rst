@@ -300,6 +300,18 @@ Informational Notes
   warning log. Existing empty policies already present in the cluster are not
   affected, but any create or update that results in an empty policy will be
   rejected.
+* The Azure IPAM status on ``CiliumNode`` now tracks the subnet at the
+  interface level, matching the AWS and AlibabaCloud IPAM representations.
+  All IP configurations on an Azure NIC must share a subnet, so the new
+  ``status.azure.interfaces[].subnet`` object (``id`` and ``cidr``) is the
+  authoritative source of subnet information. The previously redundant
+  ``status.azure.interfaces[].addresses[].subnet`` and flat
+  ``status.azure.interfaces[].cidr`` fields are deprecated and continue to
+  be populated as mirrors for one release so that operator and agent
+  rolling upgrades work in either order and so that external consumers
+  parsing the CRD have a window to switch their reads to
+  ``status.azure.interfaces[].subnet``. A future release will remove both
+  deprecated fields.
 * Cilium MCS-API implementation now uses the ``v1beta1`` version of the
   MCS-API CRDs. Note that ``v1alpha1`` remains fully supported, and this
   upgrade should be fully transparent. You are still encouraged to update
@@ -356,6 +368,9 @@ you may need to take action to migrate to an alternative.
   ``preferIpv6`` Helm value and ``--prefer-ipv6`` agent flag instead, which
   apply to both health probes and Hubble peer communication.
 
+* The ``--tofqdns-pre-cache`` agent flag and the corresponding Helm value
+  ``dnsProxy.preCache`` have been deprecated and will be removed in v1.21.
+
 Removed Options
 ###############
 
@@ -406,6 +421,12 @@ from Cilium.
 
 * The previously deprecated ``--k8s-api-server`` agent flag has been removed in
   favor of ``--k8s-api-server-urls`` (Helm ``k8s.apiServerURLs`` value).
+
+* The ``cilium-dbg preflight fqdn-poller`` subcommand and the
+  ``preflight.tofqdnsPreCache`` Helm value have been removed. These were
+  originally introduced for the v1.3 to v1.4 upgrade path and are no longer
+  needed.
+
 
 Changes to Metrics
 ~~~~~~~~~~~~~~~~~~
